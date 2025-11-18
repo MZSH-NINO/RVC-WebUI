@@ -110,10 +110,22 @@ class PreProcess:
 
     def pipeline_mp_inp_dir(self, inp_root, n_p):
         try:
-            infos = [
-                ("%s/%s" % (inp_root, name), idx)
-                for idx, name in enumerate(sorted(list(os.listdir(inp_root))))
-            ]
+            # 支持的音频文件扩展名
+            audio_extensions = {'.wav', '.mp3', '.m4a', '.flac', '.ogg', '.aac', '.wma', '.opus', '.ape', '.alac'}
+
+            infos = []
+            idx = 0
+
+            # 递归遍历所有文件，只收集音频文件
+            for root, dirs, files in os.walk(inp_root):
+                for name in sorted(files):
+                    # 检查文件扩展名
+                    _, ext = os.path.splitext(name)
+                    if ext.lower() in audio_extensions:
+                        full_path = os.path.join(root, name)
+                        infos.append((full_path, idx))
+                        idx += 1
+
             if noparallel:
                 for i in range(n_p):
                     self.pipeline_mp(infos[i::n_p])

@@ -46,9 +46,6 @@ echo [提示] 浏览器将在 WebUI 启动后自动打开
 echo [提示] 请保持此窗口打开，关闭窗口将停止 WebUI 服务
 echo.
 
-REM 后台启动端口检测任务（每秒检测一次，最多60秒）
-start /b cmd /c "for /L %%i in (1,1,60) do (netstat -an | find ":7865" | find "LISTENING" >nul && start http://127.0.0.1:7865 && exit || timeout /t 1 /nobreak >nul)" >nul 2>&1
-
 REM 在当前窗口启动 webui（前台阻塞运行）
 python infer-web.py
 set WEBUI_EXIT_CODE=%errorlevel%
