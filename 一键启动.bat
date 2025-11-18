@@ -44,9 +44,10 @@ echo [信息] 正在加载模型，请稍候...
 echo [提示] 首次运行可能需要下载额外模型
 echo [提示] 浏览器将在 WebUI 启动后自动打开
 echo [提示] 请保持此窗口打开，关闭窗口将停止 WebUI 服务
+echo [提示] CPU 模式（训练速度较慢，请耐心等待）
 echo.
 
-REM 在当前窗口启动 webui（前台阻塞运行）
+REM 在当前窗口启动 webui（前台阻塞运行，CPU 模式）
 python infer-web.py
 set WEBUI_EXIT_CODE=%errorlevel%
 

@@ -94,21 +94,40 @@ class EpochRecorder:
 
 def main():
     n_gpus = torch.cuda.device_count()
+    is_cpu_only = False  # 标记是否是纯 CPU 训练
 
     if torch.cuda.is_available() == False and torch.backends.mps.is_available() == True:
         n_gpus = 1
+    # 检查 DirectML (AMD GPU)
+    if n_gpus < 1:
+        try:
+            import torch_directml
+            if torch_directml.device_count() > 0:
+                n_gpus = 1
+                print("DirectML (AMD GPU) detected")
+        except:
+            pass
     if n_gpus < 1:
         # patch to unblock people without gpus. there is probably a better way.
         print("NO GPU DETECTED: falling back to CPU - this may take a while")
+        print("Using single-process CPU training mode (distributed training disabled)")
         n_gpus = 1
-    os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = str(randint(20000, 55555))
+        is_cpu_only = True  # 标记为 CPU 训练
+
+    # 仅在需要分布式训练时设置这些环境变量
+    if not is_cpu_only:
+        os.environ["MASTER_ADDR"] = "127.0.0.1"
+        os.environ["MASTER_PORT"] = str(randint(20000, 55555))
+        # 强制 gloo 使用 TCP 协议（Windows 兼容性）
+        os.environ["GLOO_SOCKET_IFNAME"] = ""
+        os.environ["TP_SOCKET_IFNAME"] = ""
+
     children = []
     logger = utils.get_logger(hps.model_dir)
     for i in range(n_gpus):
         subproc = mp.Process(
             target=run,
-            args=(i, n_gpus, hps, logger),
+            args=(i, n_gpus, hps, logger, is_cpu_only),  # 传递 skip_dist 参数
         )
         children.append(subproc)
         subproc.start()
@@ -117,7 +136,7 @@ def main():
         children[i].join()
 
 
-def run(rank, n_gpus, hps, logger: logging.Logger):
+def run(rank, n_gpus, hps, logger: logging.Logger, skip_dist=False):
     global global_step
     if rank == 0:
         # logger = utils.get_logger(hps.model_dir)
@@ -126,9 +145,11 @@ def run(rank, n_gpus, hps, logger: logging.Logger):
         writer = SummaryWriter(log_dir=hps.model_dir)
         writer_eval = SummaryWriter(log_dir=os.path.join(hps.model_dir, "eval"))
 
-    dist.init_process_group(
-        backend="gloo", init_method="env://", world_size=n_gpus, rank=rank
-    )
+    # 单 CPU 训练时跳过分布式初始化
+    if not skip_dist:
+        dist.init_process_group(
+            backend="gloo", init_method="env://", world_size=n_gpus, rank=rank
+        )
     torch.manual_seed(hps.train.seed)
     if torch.cuda.is_available():
         torch.cuda.set_device(rank)
@@ -137,31 +158,50 @@ def run(rank, n_gpus, hps, logger: logging.Logger):
         train_dataset = TextAudioLoaderMultiNSFsid(hps.data.training_files, hps.data)
     else:
         train_dataset = TextAudioLoader(hps.data.training_files, hps.data)
-    train_sampler = DistributedBucketSampler(
-        train_dataset,
-        hps.train.batch_size * n_gpus,
-        # [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 1200,1400],  # 16s
-        [100, 200, 300, 400, 500, 600, 700, 800, 900],  # 16s
-        num_replicas=n_gpus,
-        rank=rank,
-        shuffle=True,
-    )
+
+    # 对于单 CPU 训练，使用简单的随机采样器
+    if skip_dist:
+        from torch.utils.data import RandomSampler
+        train_sampler = RandomSampler(train_dataset)
+    else:
+        train_sampler = DistributedBucketSampler(
+            train_dataset,
+            hps.train.batch_size * n_gpus,
+            # [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 1200,1400],  # 16s
+            [100, 200, 300, 400, 500, 600, 700, 800, 900],  # 16s
+            num_replicas=n_gpus,
+            rank=rank,
+            shuffle=True,
+        )
     # It is possible that dataloader's workers are out of shared memory. Please try to raise your shared memory limit.
     # num_workers=8 -> num_workers=4
     if hps.if_f0 == 1:
         collate_fn = TextAudioCollateMultiNSFsid()
     else:
         collate_fn = TextAudioCollate()
-    train_loader = DataLoader(
-        train_dataset,
-        num_workers=4,
-        shuffle=False,
-        pin_memory=True,
-        collate_fn=collate_fn,
-        batch_sampler=train_sampler,
-        persistent_workers=True,
-        prefetch_factor=8,
-    )
+    # 对于单 CPU 训练，使用不同的 DataLoader 配置
+    if skip_dist:
+        train_loader = DataLoader(
+            train_dataset,
+            num_workers=2,  # CPU 训练减少工作进程
+            shuffle=True,
+            pin_memory=False,  # CPU 训练不需要 pin_memory
+            collate_fn=collate_fn,
+            batch_size=hps.train.batch_size,
+            persistent_workers=True,
+            prefetch_factor=2,  # CPU 训练减少预取
+        )
+    else:
+        train_loader = DataLoader(
+            train_dataset,
+            num_workers=4,
+            shuffle=False,
+            pin_memory=True,
+            collate_fn=collate_fn,
+            batch_sampler=train_sampler,
+            persistent_workers=True,
+            prefetch_factor=8,
+        )
     if hps.if_f0 == 1:
         net_g = RVC_Model_f0(
             hps.data.filter_length // 2 + 1,
@@ -196,14 +236,17 @@ def run(rank, n_gpus, hps, logger: logging.Logger):
     )
     # net_g = DDP(net_g, device_ids=[rank], find_unused_parameters=True)
     # net_d = DDP(net_d, device_ids=[rank], find_unused_parameters=True)
-    if hasattr(torch, "xpu") and torch.xpu.is_available():
-        pass
-    elif torch.cuda.is_available():
-        net_g = DDP(net_g, device_ids=[rank])
-        net_d = DDP(net_d, device_ids=[rank])
-    else:
-        net_g = DDP(net_g)
-        net_d = DDP(net_d)
+
+    # 单 CPU 训练时不使用 DDP
+    if not skip_dist:
+        if hasattr(torch, "xpu") and torch.xpu.is_available():
+            pass
+        elif torch.cuda.is_available():
+            net_g = DDP(net_g, device_ids=[rank])
+            net_d = DDP(net_d, device_ids=[rank])
+        else:
+            net_g = DDP(net_g)
+            net_d = DDP(net_d)
 
     try:  # 如果能加载自动resume
         _, _, _, epoch_str = utils.load_checkpoint(
