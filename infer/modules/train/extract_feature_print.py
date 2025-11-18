@@ -24,6 +24,14 @@ import soundfile as sf
 import torch
 import torch.nn.functional as F
 
+# 为 PyTorch 2.6+ 添加安全全局变量以加载 fairseq 模型
+if hasattr(torch.serialization, 'add_safe_globals'):
+    try:
+        import fairseq.data.dictionary
+        torch.serialization.add_safe_globals([fairseq.data.dictionary.Dictionary])
+    except:
+        pass
+
 if "privateuseone" not in device:
     device = "cpu"
     if torch.cuda.is_available():

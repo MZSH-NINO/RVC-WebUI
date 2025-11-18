@@ -29,9 +29,61 @@ try:
         GradScaler = gradscaler_init()
         ipex_init()
     else:
-        from torch.cuda.amp import GradScaler, autocast
+        # 兼容 PyTorch 2.x 新 API
+        try:
+            from torch.amp import GradScaler as _GradScaler, autocast as _autocast
+            # 为 CPU 和 CUDA 创建包装器
+            def GradScaler(*args, **kwargs):
+                device = 'cuda' if torch.cuda.is_available() else 'cpu'
+                if device == 'cpu':
+                    # CPU 不支持 GradScaler，返回一个 dummy scaler
+                    class DummyGradScaler:
+                        def __init__(self, *args, **kwargs):
+                            self.enabled = kwargs.get('enabled', False)
+                        def scale(self, loss):
+                            return loss
+                        def step(self, optimizer):
+                            optimizer.step()
+                        def update(self):
+                            pass
+                        def unscale_(self, optimizer):
+                            # CPU 模式下不需要 unscale
+                            pass
+                    return DummyGradScaler(*args, **kwargs)
+                return _GradScaler(device, *args, **kwargs)
+            def autocast(*args, **kwargs):
+                device = 'cuda' if torch.cuda.is_available() else 'cpu'
+                return _autocast(device, *args, **kwargs)
+        except ImportError:
+            from torch.cuda.amp import GradScaler, autocast
 except Exception:
-    from torch.cuda.amp import GradScaler, autocast
+    # 回退到旧 API
+    try:
+        from torch.amp import GradScaler as _GradScaler, autocast as _autocast
+        # 为 CPU 和 CUDA 创建包装器
+        def GradScaler(*args, **kwargs):
+            device = 'cuda' if torch.cuda.is_available() else 'cpu'
+            if device == 'cpu':
+                # CPU 不支持 GradScaler，返回一个 dummy scaler
+                class DummyGradScaler:
+                    def __init__(self, *args, **kwargs):
+                        self.enabled = kwargs.get('enabled', False)
+                    def scale(self, loss):
+                        return loss
+                    def step(self, optimizer):
+                        optimizer.step()
+                    def update(self):
+                        pass
+                    def unscale_(self, optimizer):
+                        # CPU 模式下不需要 unscale
+                        pass
+                return DummyGradScaler(*args, **kwargs)
+            return _GradScaler(device, *args, **kwargs)
+        def autocast(*args, **kwargs):
+            device = 'cuda' if torch.cuda.is_available() else 'cpu'
+            return _autocast(device, *args, **kwargs)
+    except ImportError:
+        from torch.cuda.amp import GradScaler, autocast
 
 torch.backends.cudnn.deterministic = False
 torch.backends.cudnn.benchmark = False
@@ -348,7 +400,9 @@ def train_and_evaluate(
     if writers is not None:
         writer, writer_eval = writers
 
-    train_loader.batch_sampler.set_epoch(epoch)
+    # 仅在分布式训练时调用 set_epoch
+    if hasattr(train_loader.batch_sampler, 'set_epoch'):
+        train_loader.batch_sampler.set_epoch(epoch)
     global global_step
 
     net_g.train()
