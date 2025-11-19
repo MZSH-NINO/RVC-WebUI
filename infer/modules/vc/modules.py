@@ -158,18 +158,23 @@ class VC:
         rms_mix_rate,
         protect,
     ):
-        if input_audio_path is None:
+        print(f"[vc_single] 开始推理: input_audio_path={input_audio_path}")
+        if input_audio_path is None or input_audio_path == "":
+            print("[vc_single] 错误：没有输入音频")
             return "You need to upload an audio", None
         f0_up_key = int(f0_up_key)
         try:
+            print(f"[vc_single] 加载音频...")
             audio = load_audio(input_audio_path, 16000)
             audio_max = np.abs(audio).max() / 0.95
             if audio_max > 1:
                 audio /= audio_max
             times = [0, 0, 0]
 
+            print(f"[vc_single] 加载 HuBERT 模型...")
             if self.hubert_model is None:
                 self.hubert_model = load_hubert(self.config)
+            print(f"[vc_single] HuBERT 模型已加载")
 
             if file_index:
                 file_index = (
@@ -185,6 +190,7 @@ class VC:
             else:
                 file_index = ""  # 防止小白写错，自动帮他替换掉
 
+            print(f"[vc_single] 开始 pipeline 推理...")
             audio_opt = self.pipeline.pipeline(
                 self.hubert_model,
                 self.net_g,
@@ -205,6 +211,7 @@ class VC:
                 protect,
                 f0_file,
             )
+            print(f"[vc_single] Pipeline 推理完成")
             if self.tgt_sr != resample_sr >= 16000:
                 tgt_sr = resample_sr
             else:
@@ -214,15 +221,22 @@ class VC:
                 if os.path.exists(file_index)
                 else "Index not used."
             )
-            return (
+            result = (
                 "Success.\n%s\nTime:\nnpy: %.2fs, f0: %.2fs, infer: %.2fs."
                 % (index_info, *times),
                 (tgt_sr, audio_opt),
             )
+            print(f"[vc_single] 推理成功！返回结果: sr={tgt_sr}, audio_len={len(audio_opt)}")
+            return result
         except:
             info = traceback.format_exc()
             logger.warning(info)
-            return info, (None, None)
+            print("=" * 60)
+            print("[vc_single] 推理错误详情:")
+            print(info)
+            print("=" * 60)
+            # 返回 None 而不是 (None, None)，这样 Gradio 可以正确处理
+            return info, None
 
     def vc_multi(
         self,

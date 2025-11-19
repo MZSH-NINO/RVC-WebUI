@@ -1,6 +1,15 @@
 import os
 
+import torch
 from fairseq import checkpoint_utils
+
+# 为 PyTorch 2.6+ 添加安全全局变量以加载 fairseq 模型
+if hasattr(torch.serialization, 'add_safe_globals'):
+    try:
+        import fairseq.data.dictionary
+        torch.serialization.add_safe_globals([fairseq.data.dictionary.Dictionary])
+    except:
+        pass
 
 
 def get_index_path_from_model(sid):

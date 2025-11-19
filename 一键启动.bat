@@ -27,33 +27,19 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-echo [2/2] 启动 WebUI...
+echo [2/2] 启动 Simple GUI...
+echo.
+echo [信息] 正在加载简易桌面界面...
+echo [提示] 请保持此窗口打开，关闭窗口将停止 GUI
+echo [提示] 如需使用原始 Gradio WebUI，请运行 go-web.bat
 echo.
 
-REM 检测端口是否已被占用
-netstat -an | find ":7865" | find "LISTENING" >nul 2>&1
-if %errorlevel% equ 0 (
-    echo [警告] 端口 7865 已被占用，可能有其他 WebUI 实例正在运行
-    echo [提示] 请先关闭其他实例，或在任务管理器中结束 python.exe 进程
-    echo.
-    pause
-    exit /b 1
-)
-
-echo [信息] 正在加载模型，请稍候...
-echo [提示] 首次运行可能需要下载额外模型
-echo [提示] 浏览器将在 WebUI 启动后自动打开
-echo [提示] 请保持此窗口打开，关闭窗口将停止 WebUI 服务
-echo [提示] CPU 模式（训练速度较慢，请耐心等待）
-echo.
-
-REM 在当前窗口启动 webui（前台阻塞运行，CPU 模式）
-python infer-web.py
+python simple_gui.py
 set WEBUI_EXIT_CODE=%errorlevel%
 
 echo.
 echo ========================================
-echo WebUI 已停止运行 (退出代码: %WEBUI_EXIT_CODE%)
+echo 程序已停止运行 (退出代码: %WEBUI_EXIT_CODE%)
 echo ========================================
 echo.
 pause
