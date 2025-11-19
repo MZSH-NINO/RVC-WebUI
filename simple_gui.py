@@ -17,6 +17,9 @@ from scipy.io import wavfile
 import subprocess
 import json
 from random import shuffle
+import numpy as np
+import faiss
+from sklearn.cluster import MiniBatchKMeans
 
 
 class SimpleRVCGUI:
@@ -195,16 +198,11 @@ class SimpleRVCGUI:
         self.save_epoch = tk.IntVar(value=10)
         ttk.Spinbox(param_frame, from_=1, to=100, textvariable=self.save_epoch, width=10).grid(row=4, column=1, sticky=tk.W, padx=5, pady=2)
 
-        # 训练步骤
-        ttk.Label(frame, text="训练步骤", font=("微软雅黑", 10, "bold")).grid(row=6, column=0, sticky=tk.W, padx=10, pady=5)
-
+        # 一键训练按钮
         btn_frame = ttk.Frame(frame)
-        btn_frame.grid(row=7, column=0, columnspan=3, sticky=tk.EW, padx=10, pady=5)
+        btn_frame.grid(row=6, column=0, columnspan=3, sticky=tk.EW, padx=10, pady=10)
 
-        ttk.Button(btn_frame, text="1. 预处理数据集", command=self.preprocess_dataset).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text="2. 提取特征", command=self.extract_features).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text="3. 开始训练", command=self.train_model).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text="一键训练", command=self.auto_train, style="Accent.TButton").pack(side=tk.LEFT, padx=10)
+        ttk.Button(btn_frame, text="开始训练", command=self.auto_train, style="Accent.TButton").pack(pady=5)
 
         # 训练日志
         ttk.Label(frame, text="训练日志", font=("微软雅黑", 10, "bold")).grid(row=8, column=0, sticky=tk.W, padx=10, pady=5)
@@ -216,70 +214,33 @@ class SimpleRVCGUI:
         frame.grid_rowconfigure(9, weight=1)
 
     def refresh_models(self):
-        """刷新模型列表"""
+        """刷新模型列表（仅显示成品模型）"""
         models = []
 
-        # 1. 扫描 assets/weights 目录（已提取的最终模型）
+        # 扫描 assets/weights 目录（成品模型）
         weight_root = os.getenv("weight_root", "assets/weights")
         if os.path.exists(weight_root):
             for name in os.listdir(weight_root):
                 if name.endswith(".pth"):
-                    models.append(("weights", name))
+                    models.append(name)
 
-        # 2. 扫描 logs 目录下的训练模型
-        logs_dir = os.path.join(now_dir, "logs")
-        if os.path.exists(logs_dir):
-            for exp_name in os.listdir(logs_dir):
-                exp_path = os.path.join(logs_dir, exp_name)
-                if os.path.isdir(exp_path):
-                    for file in os.listdir(exp_path):
-                        if file.startswith("G_") and file.endswith(".pth"):
-                            # 格式: 实验名/G_epoch.pth
-                            models.append(("logs", f"{exp_name}/{file}"))
+        self.model_combo['values'] = models
+        self.model_data = models  # 保存模型列表
 
-        # 格式化显示
-        model_names = []
-        for source, name in models:
-            if source == "weights":
-                model_names.append(f"[成品] {name}")
-            else:
-                model_names.append(f"[训练] {name}")
-
-        self.model_combo['values'] = model_names
-        self.model_data = models  # 保存原始数据用于加载
-
-        if model_names:
+        if models:
             self.model_combo.current(0)
 
     def load_model(self):
         """加载模型"""
-        display_name = self.model_var.get()
-        if not display_name:
+        model_name = self.model_var.get()
+        if not model_name:
             messagebox.showwarning("警告", "请先选择一个模型！")
             return
 
-        # 获取选中的索引
-        selected_idx = self.model_combo.current()
-        if selected_idx < 0 or selected_idx >= len(self.model_data):
-            messagebox.showwarning("警告", "无效的模型选择！")
-            return
-
-        source, model_path = self.model_data[selected_idx]
-
         def load():
             try:
-                self.log_inference(f"正在加载模型: {display_name}...")
-
-                # 根据来源构建完整路径
-                if source == "weights":
-                    # 从 assets/weights 加载
-                    full_path = model_path
-                else:
-                    # 从 logs 加载，路径已包含实验名
-                    full_path = os.path.join("logs", model_path)
-
-                self.log_inference(f"模型路径: {full_path}")
-                self.vc.get_vc(full_path)
+                self.log_inference(f"正在加载模型: {model_name}...")
+                self.vc.get_vc(model_name)
                 self.log_inference(f"模型加载成功！")
                 messagebox.showinfo("成功", f"模型加载成功！")
             except Exception as e:
@@ -335,21 +296,13 @@ class SimpleRVCGUI:
                 self.log_inference(f"参数: 音高={self.f0_up_key.get()}, 算法={self.f0_method.get()}")
 
                 # 自动查找对应的 index 文件
-                selected_idx = self.model_combo.current()
+                model_name = self.model_var.get()
                 index_file = ""
 
-                if selected_idx >= 0 and selected_idx < len(self.model_data):
-                    source, model_path = self.model_data[selected_idx]
-
-                    # 根据模型来源确定查找路径
-                    if source == "weights":
-                        # 成品模型，index 在 logs/模型名 下
-                        model_base = model_path.replace(".pth", "")
-                        index_dir = os.path.join("logs", model_base)
-                    else:
-                        # 训练模型，index 在同一目录下
-                        exp_name = model_path.split("/")[0]
-                        index_dir = os.path.join("logs", exp_name)
+                if model_name:
+                    # 成品模型，index 在 logs/模型名（不含.pth） 下
+                    model_base = model_name.replace(".pth", "")
+                    index_dir = os.path.join("logs", model_base)
 
                     # 尝试查找 index 文件
                     if os.path.exists(index_dir):
@@ -521,13 +474,13 @@ class SimpleRVCGUI:
                 for _ in range(2):
                     opt.append(
                         "%s/logs/mute/0_gt_wavs/mute%s.wav|%s/logs/mute/3_feature%s/mute.npy|%s/logs/mute/2a_f0/mute.wav.npy|%s/logs/mute/2b-f0nsf/mute.wav.npy|%s"
-                        % (now_dir, sr, now_dir, fea_dim, now_dir, now_dir, 0)
+                        % (now_dir, sr_str, now_dir, fea_dim, now_dir, now_dir, 0)
                     )
             else:
                 for _ in range(2):
                     opt.append(
                         "%s/logs/mute/0_gt_wavs/mute%s.wav|%s/logs/mute/3_feature%s/mute.npy|%s"
-                        % (now_dir, sr, now_dir, fea_dim, 0)
+                        % (now_dir, sr_str, now_dir, fea_dim, 0)
                     )
 
             shuffle(opt)
@@ -746,70 +699,128 @@ class SimpleRVCGUI:
                 self.log_training("开始一键训练流程")
                 self.log_training("="*60)
 
-                # 步骤 1: 预处理
-                self.log_training("\n[步骤 1/3] 预处理数据集...")
+                # 步骤 0: 清理实验目录
                 sr_dict = {"32k": 32000, "40k": 40000, "48k": 48000}
                 sr = sr_dict[self.sr_var.get()]
                 exp_dir = os.path.join(now_dir, "logs", exp_name)
+
+                if os.path.exists(exp_dir):
+                    self.log_training("\n[步骤 0] 清理旧的训练文件...")
+                    import shutil
+                    try:
+                        shutil.rmtree(exp_dir)
+                        self.log_training("已清理旧文件")
+                    except Exception as e:
+                        self.log_training(f"清理失败: {e}")
+
                 os.makedirs(exp_dir, exist_ok=True)
+
+                # 步骤 1: 预处理
+                self.log_training("\n[步骤 1/5] 预处理数据集...")
 
                 python_cmd = sys.executable
                 n_p = os.cpu_count()
                 per = 3.7
 
+                # 创建静默执行的参数（隐藏命令行窗口）
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                startupinfo.wShowWindow = subprocess.SW_HIDE
+                creation_flags = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
+
                 cmd = [python_cmd, "infer/modules/train/preprocess.py", dataset_path, str(sr), str(n_p), exp_dir, "False", str(per)]
-                result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='ignore')
+                result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='ignore',
+                                       startupinfo=startupinfo, creationflags=creation_flags)
                 if result.stdout:
                     self.log_training(result.stdout)
                 if result.returncode != 0:
                     raise Exception(f"预处理失败 (代码: {result.returncode})")
-                self.log_training("[步骤 1/3] 预处理完成！\n")
+                self.log_training("[步骤 1/5] 预处理完成！\n")
 
                 # 步骤 2: 提取特征
-                self.log_training("[步骤 2/3] 提取特征...")
+                self.log_training("[步骤 2/5] 提取特征...")
                 version = "v2"
 
                 if self.if_f0_var.get():
                     self.log_training(f"提取音高特征 (算法: {self.train_f0_method.get()})...")
                     cmd = [python_cmd, "infer/modules/train/extract/extract_f0_print.py", exp_dir, str(n_p), self.train_f0_method.get()]
-                    result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='ignore')
+                    result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='ignore',
+                                           startupinfo=startupinfo, creationflags=creation_flags)
                     if result.stdout:
                         self.log_training(result.stdout)
+                    if result.stderr:
+                        self.log_training(f"F0提取警告: {result.stderr}")
 
                 self.log_training("提取 HuBERT 特征...")
-                cmd = [python_cmd, "infer/modules/train/extract_feature_print.py", "cpu", "1", "0", exp_dir, version]
-                result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='ignore')
+                cmd = [python_cmd, "infer/modules/train/extract_feature_print.py", "cpu", "1", "0", exp_dir, version, "False"]
+                result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='ignore',
+                                       startupinfo=startupinfo, creationflags=creation_flags)
                 if result.stdout:
                     self.log_training(result.stdout)
-                self.log_training("[步骤 2/3] 特征提取完成！\n")
+                if result.stderr:
+                    self.log_training(f"HuBERT提取警告: {result.stderr}")
+                if result.returncode != 0:
+                    raise Exception(f"HuBERT特征提取失败 (代码: {result.returncode})")
+                self.log_training("[步骤 2/5] 特征提取完成！\n")
 
                 # 步骤 3: 准备训练配置
-                self.log_training("\n[步骤 3/4] 准备训练配置...")
+                self.log_training("\n[步骤 3/5] 准备训练配置...")
                 if not self.prepare_training_config(exp_dir, sr, self.if_f0_var.get(), "v2"):
                     raise Exception("配置文件生成失败")
-                self.log_training("[步骤 3/4] 配置文件已生成！\n")
+                self.log_training("[步骤 3/5] 配置文件已生成！\n")
 
                 # 步骤 4: 训练
-                self.log_training("[步骤 4/4] 开始训练模型...")
+                self.log_training("[步骤 4/5] 开始训练模型...")
+                self.log_training(f"训练参数: 轮数={self.total_epoch.get()}, 批次={self.batch_size.get()}, 保存频率={self.save_epoch.get()}")
+
                 cmd = [
                     python_cmd, "infer/modules/train/train.py",
                     "-e", exp_name,
-                    "-sr", str(sr),
+                    "-sr", self.sr_var.get(),  # 直接使用"32k", "40k", "48k"
                     "-f0", "1" if self.if_f0_var.get() else "0",
                     "-bs", str(self.batch_size.get()),
-                    "-g", "0",
+                    "-g", "0",  # GPU编号，0表示CPU
                     "-te", str(self.total_epoch.get()),
                     "-se", str(self.save_epoch.get()),
-                    "-pg", "", "-pd", "",
-                    "-l", "0", "-c", "0", "-sw", "0", "-v", "v2"
+                    "-l", "0",  # 是否从最新检查点加载
+                    "-c", "0",  # 是否仅保存最新检查点
+                    "-sw", "0",  # 是否保存每个权重
+                    "-v", "v2"
                 ]
 
-                process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='ignore', bufsize=1)
-                for line in process.stdout:
-                    self.log_training(line.strip())
+                # 使用静默执行，隐藏命令行窗口
+                process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                          encoding='utf-8', errors='ignore', bufsize=1,
+                                          startupinfo=startupinfo, creationflags=creation_flags)
+
+                # 实时读取输出
+                while True:
+                    line = process.stdout.readline()
+                    if not line:
+                        if process.poll() is not None:
+                            break
+                        continue
+                    self.log_training(line.rstrip())
+
+                # 读取stderr
+                stderr_output = process.stderr.read()
+                if stderr_output:
+                    self.log_training(f"\n训练错误/警告:\n{stderr_output}")
+
                 process.wait()
 
                 if process.returncode == 0:
+                    self.log_training("[步骤 4/5] 模型训练完成！\n")
+
+                    # 步骤 5: 训练索引
+                    self.log_training("[步骤 5/5] 训练索引文件...")
+                    try:
+                        self.train_index(exp_name, exp_dir, version)
+                        self.log_training("[步骤 5/5] 索引训练完成！\n")
+                    except Exception as e:
+                        self.log_training(f"索引训练失败: {str(e)}")
+                        self.log_training("训练可以继续使用，但没有索引文件可能影响音质")
+
                     self.log_training("\n" + "="*60)
                     self.log_training("一键训练完成！")
                     self.log_training("="*60)
@@ -838,6 +849,79 @@ class SimpleRVCGUI:
         self.training_log.insert(tk.END, f"{message}\n")
         self.training_log.see(tk.END)
         self.root.update_idletasks()
+
+    def train_index(self, exp_name, exp_dir, version):
+        """训练索引文件"""
+        feature_dir = os.path.join(exp_dir, "3_feature256" if version == "v1" else "3_feature768")
+
+        if not os.path.exists(feature_dir):
+            raise Exception("特征目录不存在")
+
+        listdir_res = list(os.listdir(feature_dir))
+        if len(listdir_res) == 0:
+            raise Exception("特征目录为空")
+
+        # 加载所有特征
+        self.log_training("加载特征文件...")
+        npys = []
+        for name in sorted(listdir_res):
+            phone = np.load(os.path.join(feature_dir, name))
+            npys.append(phone)
+
+        big_npy = np.concatenate(npys, 0)
+        big_npy_idx = np.arange(big_npy.shape[0])
+        np.random.shuffle(big_npy_idx)
+        big_npy = big_npy[big_npy_idx]
+
+        # 如果特征太多，使用 KMeans 聚类
+        if big_npy.shape[0] > 2e5:
+            self.log_training(f"特征数量 {big_npy.shape[0]} 过多，使用 KMeans 聚类到 10k 中心...")
+            try:
+                n_cpu = os.cpu_count()
+                big_npy = (
+                    MiniBatchKMeans(
+                        n_clusters=10000,
+                        verbose=True,
+                        batch_size=256 * n_cpu,
+                        compute_labels=False,
+                        init="random",
+                    )
+                    .fit(big_npy)
+                    .cluster_centers_
+                )
+            except Exception as e:
+                self.log_training(f"KMeans 聚类警告: {str(e)}")
+
+        # 保存特征
+        np.save(os.path.join(exp_dir, "total_fea.npy"), big_npy)
+
+        # 训练索引
+        n_ivf = min(int(16 * np.sqrt(big_npy.shape[0])), big_npy.shape[0] // 39)
+        self.log_training(f"特征形状: {big_npy.shape}, IVF数量: {n_ivf}")
+
+        index = faiss.index_factory(256 if version == "v1" else 768, "IVF%s,Flat" % n_ivf)
+        self.log_training("训练索引...")
+        index_ivf = faiss.extract_index_ivf(index)
+        index_ivf.nprobe = 1
+        index.train(big_npy)
+
+        # 保存训练后的索引
+        faiss.write_index(
+            index,
+            os.path.join(exp_dir, f"trained_IVF{n_ivf}_Flat_nprobe_{index_ivf.nprobe}_{exp_name}_{version}.index")
+        )
+
+        # 添加向量
+        self.log_training("添加向量...")
+        batch_size_add = 8192
+        for i in range(0, big_npy.shape[0], batch_size_add):
+            index.add(big_npy[i : i + batch_size_add])
+
+        # 保存最终索引
+        index_file = os.path.join(exp_dir, f"added_IVF{n_ivf}_Flat_nprobe_{index_ivf.nprobe}_{exp_name}_{version}.index")
+        faiss.write_index(index, index_file)
+
+        self.log_training(f"索引文件已保存: {os.path.basename(index_file)}")
 
 
 def main():

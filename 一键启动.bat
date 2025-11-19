@@ -28,18 +28,9 @@ if %errorlevel% neq 0 (
 )
 
 echo [2/2] 启动 Simple GUI...
-echo.
 echo [信息] 正在加载简易桌面界面...
-echo [提示] 请保持此窗口打开，关闭窗口将停止 GUI
-echo [提示] 如需使用原始 Gradio WebUI，请运行 go-web.bat
 echo.
 
-python simple_gui.py
-set WEBUI_EXIT_CODE=%errorlevel%
-
-echo.
-echo ========================================
-echo 程序已停止运行 (退出代码: %WEBUI_EXIT_CODE%)
-echo ========================================
-echo.
-pause
+REM 使用 pythonw 无窗口启动，关闭GUI即关闭程序
+start "" pythonw simple_gui.py
+exit
