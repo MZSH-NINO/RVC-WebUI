@@ -15,17 +15,25 @@ from configs.config import Config
 from infer.modules.vc.modules import VC
 from scipy.io import wavfile
 import subprocess
+import json
+from random import shuffle
 
 
 class SimpleRVCGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("RVC Simple GUI - Training & Inference")
-        self.root.geometry("900x700")
+        self.root.title("RVC 简易工具 - 训练与推理")
+        self.root.geometry("950x750")
 
         # 初始化配置
         self.config = Config()
         self.vc = VC(self.config)
+
+        # 训练进度标志
+        self.training_in_progress = False
+
+        # 模型数据（用于记录模型来源和路径）
+        self.model_data = []
 
         # 创建主布局
         self.create_widgets()
@@ -42,8 +50,8 @@ class SimpleRVCGUI:
         self.inference_frame = ttk.Frame(self.notebook)
         self.train_frame = ttk.Frame(self.notebook)
 
-        self.notebook.add(self.inference_frame, text="Inference (音频转换)")
-        self.notebook.add(self.train_frame, text="Training (训练)")
+        self.notebook.add(self.inference_frame, text="音频转换")
+        self.notebook.add(self.train_frame, text="模型训练")
 
         # 创建推理界面
         self.create_inference_ui()
@@ -55,8 +63,8 @@ class SimpleRVCGUI:
         """创建推理界面"""
         frame = self.inference_frame
 
-        # Model Selection
-        ttk.Label(frame, text="Model Selection:", font=("Arial", 10, "bold")).grid(row=0, column=0, sticky=tk.W, padx=10, pady=5)
+        # 模型选择
+        ttk.Label(frame, text="模型选择", font=("微软雅黑", 10, "bold")).grid(row=0, column=0, sticky=tk.W, padx=10, pady=5)
 
         model_frame = ttk.Frame(frame)
         model_frame.grid(row=1, column=0, columnspan=3, sticky=tk.EW, padx=10, pady=5)
@@ -65,67 +73,67 @@ class SimpleRVCGUI:
         self.model_combo = ttk.Combobox(model_frame, textvariable=self.model_var, state="readonly", width=50)
         self.model_combo.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
-        ttk.Button(model_frame, text="Refresh", command=self.refresh_models).pack(side=tk.LEFT, padx=5)
-        ttk.Button(model_frame, text="Load Model", command=self.load_model).pack(side=tk.LEFT)
+        ttk.Button(model_frame, text="刷新", command=self.refresh_models).pack(side=tk.LEFT, padx=5)
+        ttk.Button(model_frame, text="加载模型", command=self.load_model).pack(side=tk.LEFT)
 
-        # Input Audio
-        ttk.Label(frame, text="Input Audio:", font=("Arial", 10, "bold")).grid(row=2, column=0, sticky=tk.W, padx=10, pady=5)
+        # 输入音频
+        ttk.Label(frame, text="输入音频", font=("微软雅黑", 10, "bold")).grid(row=2, column=0, sticky=tk.W, padx=10, pady=5)
 
         input_frame = ttk.Frame(frame)
         input_frame.grid(row=3, column=0, columnspan=3, sticky=tk.EW, padx=10, pady=5)
 
         self.input_path_var = tk.StringVar()
         ttk.Entry(input_frame, textvariable=self.input_path_var).pack(side=tk.LEFT, fill=tk.X, expand=True)
-        ttk.Button(input_frame, text="Browse", command=self.browse_input).pack(side=tk.LEFT, padx=5)
+        ttk.Button(input_frame, text="浏览", command=self.browse_input).pack(side=tk.LEFT, padx=5)
 
-        # Output Audio
-        ttk.Label(frame, text="Output Audio:", font=("Arial", 10, "bold")).grid(row=4, column=0, sticky=tk.W, padx=10, pady=5)
+        # 输出音频
+        ttk.Label(frame, text="输出音频", font=("微软雅黑", 10, "bold")).grid(row=4, column=0, sticky=tk.W, padx=10, pady=5)
 
         output_frame = ttk.Frame(frame)
         output_frame.grid(row=5, column=0, columnspan=3, sticky=tk.EW, padx=10, pady=5)
 
         self.output_path_var = tk.StringVar(value="output.wav")
         ttk.Entry(output_frame, textvariable=self.output_path_var).pack(side=tk.LEFT, fill=tk.X, expand=True)
-        ttk.Button(output_frame, text="Browse", command=self.browse_output).pack(side=tk.LEFT, padx=5)
+        ttk.Button(output_frame, text="浏览", command=self.browse_output).pack(side=tk.LEFT, padx=5)
 
-        # Parameters
-        ttk.Label(frame, text="Parameters:", font=("Arial", 10, "bold")).grid(row=6, column=0, sticky=tk.W, padx=10, pady=5)
+        # 参数设置
+        ttk.Label(frame, text="参数设置", font=("微软雅黑", 10, "bold")).grid(row=6, column=0, sticky=tk.W, padx=10, pady=5)
 
         param_frame = ttk.Frame(frame)
         param_frame.grid(row=7, column=0, columnspan=3, sticky=tk.EW, padx=10, pady=5)
 
-        # F0 Up Key (Pitch Shift)
-        ttk.Label(param_frame, text="Pitch Shift:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=2)
+        # 音高调整
+        ttk.Label(param_frame, text="音高调整:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=2)
         self.f0_up_key = tk.IntVar(value=0)
         ttk.Spinbox(param_frame, from_=-12, to=12, textvariable=self.f0_up_key, width=10).grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
 
-        # F0 Method
-        ttk.Label(param_frame, text="F0 Method:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=2)
+        # 音高提取算法
+        ttk.Label(param_frame, text="音高提取算法:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=2)
         self.f0_method = tk.StringVar(value="harvest")
-        ttk.Combobox(param_frame, textvariable=self.f0_method, values=["harvest", "crepe", "rmvpe", "pm"], state="readonly", width=10).grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
+        ttk.Combobox(param_frame, textvariable=self.f0_method, values=["pm", "harvest", "crepe", "rmvpe"], state="readonly", width=10).grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
 
-        # Index Rate
-        ttk.Label(param_frame, text="Index Rate:").grid(row=2, column=0, sticky=tk.W, padx=5, pady=2)
+        # 索引率
+        ttk.Label(param_frame, text="索引率:").grid(row=2, column=0, sticky=tk.W, padx=5, pady=2)
         self.index_rate = tk.DoubleVar(value=0.66)
         ttk.Scale(param_frame, from_=0, to=1, variable=self.index_rate, orient=tk.HORIZONTAL).grid(row=2, column=1, sticky=tk.EW, padx=5, pady=2)
         ttk.Label(param_frame, textvariable=self.index_rate).grid(row=2, column=2, sticky=tk.W, padx=5, pady=2)
 
-        # Filter Radius
-        ttk.Label(param_frame, text="Filter Radius:").grid(row=3, column=0, sticky=tk.W, padx=5, pady=2)
+        # 滤波半径
+        ttk.Label(param_frame, text="滤波半径:").grid(row=3, column=0, sticky=tk.W, padx=5, pady=2)
         self.filter_radius = tk.IntVar(value=3)
         ttk.Spinbox(param_frame, from_=0, to=7, textvariable=self.filter_radius, width=10).grid(row=3, column=1, sticky=tk.W, padx=5, pady=2)
 
-        # Protect
-        ttk.Label(param_frame, text="Protect:").grid(row=4, column=0, sticky=tk.W, padx=5, pady=2)
+        # 保护清辅音
+        ttk.Label(param_frame, text="保护清辅音:").grid(row=4, column=0, sticky=tk.W, padx=5, pady=2)
         self.protect = tk.DoubleVar(value=0.33)
         ttk.Scale(param_frame, from_=0, to=0.5, variable=self.protect, orient=tk.HORIZONTAL).grid(row=4, column=1, sticky=tk.EW, padx=5, pady=2)
         ttk.Label(param_frame, textvariable=self.protect).grid(row=4, column=2, sticky=tk.W, padx=5, pady=2)
 
-        # Convert Button
-        ttk.Button(frame, text="Convert Audio", command=self.convert_audio, style="Accent.TButton").grid(row=8, column=0, columnspan=3, pady=10)
+        # 转换按钮
+        ttk.Button(frame, text="开始转换", command=self.convert_audio).grid(row=8, column=0, columnspan=3, pady=10)
 
-        # Log Output
-        ttk.Label(frame, text="Log Output:", font=("Arial", 10, "bold")).grid(row=9, column=0, sticky=tk.W, padx=10, pady=5)
+        # 日志输出
+        ttk.Label(frame, text="日志输出", font=("微软雅黑", 10, "bold")).grid(row=9, column=0, sticky=tk.W, padx=10, pady=5)
 
         self.inference_log = scrolledtext.ScrolledText(frame, height=10, wrap=tk.WORD)
         self.inference_log.grid(row=10, column=0, columnspan=3, sticky=tk.NSEW, padx=10, pady=5)
@@ -137,58 +145,69 @@ class SimpleRVCGUI:
         """创建训练界面"""
         frame = self.train_frame
 
-        # Experiment Name
-        ttk.Label(frame, text="Experiment Name:", font=("Arial", 10, "bold")).grid(row=0, column=0, sticky=tk.W, padx=10, pady=5)
+        # 实验名称
+        ttk.Label(frame, text="实验名称", font=("微软雅黑", 10, "bold")).grid(row=0, column=0, sticky=tk.W, padx=10, pady=5)
         self.exp_name_var = tk.StringVar(value="my_model")
         ttk.Entry(frame, textvariable=self.exp_name_var, width=50).grid(row=1, column=0, columnspan=3, sticky=tk.EW, padx=10, pady=5)
 
-        # Dataset Directory
-        ttk.Label(frame, text="Dataset Directory:", font=("Arial", 10, "bold")).grid(row=2, column=0, sticky=tk.W, padx=10, pady=5)
+        # 数据集目录
+        ttk.Label(frame, text="数据集目录", font=("微软雅黑", 10, "bold")).grid(row=2, column=0, sticky=tk.W, padx=10, pady=5)
 
         dataset_frame = ttk.Frame(frame)
         dataset_frame.grid(row=3, column=0, columnspan=3, sticky=tk.EW, padx=10, pady=5)
 
         self.dataset_path_var = tk.StringVar()
         ttk.Entry(dataset_frame, textvariable=self.dataset_path_var).pack(side=tk.LEFT, fill=tk.X, expand=True)
-        ttk.Button(dataset_frame, text="Browse", command=self.browse_dataset).pack(side=tk.LEFT, padx=5)
+        ttk.Button(dataset_frame, text="浏览", command=self.browse_dataset).pack(side=tk.LEFT, padx=5)
 
-        # Training Parameters
-        ttk.Label(frame, text="Training Parameters:", font=("Arial", 10, "bold")).grid(row=4, column=0, sticky=tk.W, padx=10, pady=5)
+        # 训练参数
+        ttk.Label(frame, text="训练参数", font=("微软雅黑", 10, "bold")).grid(row=4, column=0, sticky=tk.W, padx=10, pady=5)
 
         param_frame = ttk.Frame(frame)
         param_frame.grid(row=5, column=0, columnspan=3, sticky=tk.EW, padx=10, pady=5)
 
-        # Sample Rate
-        ttk.Label(param_frame, text="Sample Rate:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=2)
+        # 采样率
+        ttk.Label(param_frame, text="采样率:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=2)
         self.sr_var = tk.StringVar(value="40k")
         ttk.Combobox(param_frame, textvariable=self.sr_var, values=["32k", "40k", "48k"], state="readonly", width=10).grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
 
-        # Use F0
+        # 是否使用音高
         self.if_f0_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(param_frame, text="Use F0 (Pitch)", variable=self.if_f0_var).grid(row=0, column=2, sticky=tk.W, padx=5, pady=2)
+        ttk.Checkbutton(param_frame, text="使用音高引导", variable=self.if_f0_var).grid(row=0, column=2, sticky=tk.W, padx=5, pady=2)
 
-        # Total Epochs
-        ttk.Label(param_frame, text="Total Epochs:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=2)
+        # 音高提取算法
+        ttk.Label(param_frame, text="音高提取算法:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=2)
+        self.train_f0_method = tk.StringVar(value="harvest")
+        ttk.Combobox(param_frame, textvariable=self.train_f0_method, values=["pm", "harvest", "crepe", "rmvpe"], state="readonly", width=10).grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
+
+        # 训练轮数
+        ttk.Label(param_frame, text="训练轮数:").grid(row=2, column=0, sticky=tk.W, padx=5, pady=2)
         self.total_epoch = tk.IntVar(value=200)
-        ttk.Spinbox(param_frame, from_=10, to=1000, textvariable=self.total_epoch, width=10).grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
+        ttk.Spinbox(param_frame, from_=10, to=1000, textvariable=self.total_epoch, width=10).grid(row=2, column=1, sticky=tk.W, padx=5, pady=2)
 
-        # Batch Size
-        ttk.Label(param_frame, text="Batch Size:").grid(row=2, column=0, sticky=tk.W, padx=5, pady=2)
+        # 批次大小
+        ttk.Label(param_frame, text="批次大小:").grid(row=3, column=0, sticky=tk.W, padx=5, pady=2)
         self.batch_size = tk.IntVar(value=8)
-        ttk.Spinbox(param_frame, from_=1, to=32, textvariable=self.batch_size, width=10).grid(row=2, column=1, sticky=tk.W, padx=5, pady=2)
+        ttk.Spinbox(param_frame, from_=1, to=32, textvariable=self.batch_size, width=10).grid(row=3, column=1, sticky=tk.W, padx=5, pady=2)
 
-        # Training Steps
-        ttk.Label(frame, text="Training Steps:", font=("Arial", 10, "bold")).grid(row=6, column=0, sticky=tk.W, padx=10, pady=5)
+        # 保存频率
+        ttk.Label(param_frame, text="保存频率:").grid(row=4, column=0, sticky=tk.W, padx=5, pady=2)
+        self.save_epoch = tk.IntVar(value=10)
+        ttk.Spinbox(param_frame, from_=1, to=100, textvariable=self.save_epoch, width=10).grid(row=4, column=1, sticky=tk.W, padx=5, pady=2)
+
+        # 训练步骤
+        ttk.Label(frame, text="训练步骤", font=("微软雅黑", 10, "bold")).grid(row=6, column=0, sticky=tk.W, padx=10, pady=5)
 
         btn_frame = ttk.Frame(frame)
         btn_frame.grid(row=7, column=0, columnspan=3, sticky=tk.EW, padx=10, pady=5)
 
-        ttk.Button(btn_frame, text="1. Preprocess Dataset", command=self.preprocess_dataset).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text="2. Extract Features", command=self.extract_features).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text="3. Train Model", command=self.train_model).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="1. 预处理数据集", command=self.preprocess_dataset).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="2. 提取特征", command=self.extract_features).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="3. 开始训练", command=self.train_model).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="一键训练", command=self.auto_train, style="Accent.TButton").pack(side=tk.LEFT, padx=10)
 
-        # Training Log
-        ttk.Label(frame, text="Training Log:", font=("Arial", 10, "bold")).grid(row=8, column=0, sticky=tk.W, padx=10, pady=5)
+        # 训练日志
+        ttk.Label(frame, text="训练日志", font=("微软雅黑", 10, "bold")).grid(row=8, column=0, sticky=tk.W, padx=10, pady=5)
 
         self.training_log = scrolledtext.ScrolledText(frame, height=15, wrap=tk.WORD)
         self.training_log.grid(row=9, column=0, columnspan=3, sticky=tk.NSEW, padx=10, pady=5)
@@ -198,40 +217,84 @@ class SimpleRVCGUI:
 
     def refresh_models(self):
         """刷新模型列表"""
-        weight_root = os.getenv("weight_root", "assets/weights")
         models = []
+
+        # 1. 扫描 assets/weights 目录（已提取的最终模型）
+        weight_root = os.getenv("weight_root", "assets/weights")
         if os.path.exists(weight_root):
             for name in os.listdir(weight_root):
                 if name.endswith(".pth"):
-                    models.append(name)
-        self.model_combo['values'] = models
-        if models:
+                    models.append(("weights", name))
+
+        # 2. 扫描 logs 目录下的训练模型
+        logs_dir = os.path.join(now_dir, "logs")
+        if os.path.exists(logs_dir):
+            for exp_name in os.listdir(logs_dir):
+                exp_path = os.path.join(logs_dir, exp_name)
+                if os.path.isdir(exp_path):
+                    for file in os.listdir(exp_path):
+                        if file.startswith("G_") and file.endswith(".pth"):
+                            # 格式: 实验名/G_epoch.pth
+                            models.append(("logs", f"{exp_name}/{file}"))
+
+        # 格式化显示
+        model_names = []
+        for source, name in models:
+            if source == "weights":
+                model_names.append(f"[成品] {name}")
+            else:
+                model_names.append(f"[训练] {name}")
+
+        self.model_combo['values'] = model_names
+        self.model_data = models  # 保存原始数据用于加载
+
+        if model_names:
             self.model_combo.current(0)
 
     def load_model(self):
         """加载模型"""
-        model_name = self.model_var.get()
-        if not model_name:
-            messagebox.showwarning("Warning", "Please select a model first!")
+        display_name = self.model_var.get()
+        if not display_name:
+            messagebox.showwarning("警告", "请先选择一个模型！")
             return
+
+        # 获取选中的索引
+        selected_idx = self.model_combo.current()
+        if selected_idx < 0 or selected_idx >= len(self.model_data):
+            messagebox.showwarning("警告", "无效的模型选择！")
+            return
+
+        source, model_path = self.model_data[selected_idx]
 
         def load():
             try:
-                self.log_inference(f"Loading model: {model_name}...")
-                self.vc.get_vc(model_name)
-                self.log_inference(f"Model loaded successfully!")
-                messagebox.showinfo("Success", f"Model {model_name} loaded!")
+                self.log_inference(f"正在加载模型: {display_name}...")
+
+                # 根据来源构建完整路径
+                if source == "weights":
+                    # 从 assets/weights 加载
+                    full_path = model_path
+                else:
+                    # 从 logs 加载，路径已包含实验名
+                    full_path = os.path.join("logs", model_path)
+
+                self.log_inference(f"模型路径: {full_path}")
+                self.vc.get_vc(full_path)
+                self.log_inference(f"模型加载成功！")
+                messagebox.showinfo("成功", f"模型加载成功！")
             except Exception as e:
-                self.log_inference(f"Error loading model: {str(e)}")
-                messagebox.showerror("Error", f"Failed to load model: {str(e)}")
+                import traceback
+                error_msg = traceback.format_exc()
+                self.log_inference(f"模型加载错误:\n{error_msg}")
+                messagebox.showerror("错误", f"模型加载失败: {str(e)}")
 
         threading.Thread(target=load, daemon=True).start()
 
     def browse_input(self):
         """选择输入音频"""
         filename = filedialog.askopenfilename(
-            title="Select Input Audio",
-            filetypes=[("Audio Files", "*.wav *.mp3 *.flac *.m4a"), ("All Files", "*.*")]
+            title="选择输入音频",
+            filetypes=[("音频文件", "*.wav *.mp3 *.flac *.m4a"), ("所有文件", "*.*")]
         )
         if filename:
             self.input_path_var.set(filename)
@@ -239,16 +302,16 @@ class SimpleRVCGUI:
     def browse_output(self):
         """选择输出路径"""
         filename = filedialog.asksaveasfilename(
-            title="Save Output Audio",
+            title="保存输出音频",
             defaultextension=".wav",
-            filetypes=[("WAV Files", "*.wav"), ("All Files", "*.*")]
+            filetypes=[("WAV 文件", "*.wav"), ("所有文件", "*.*")]
         )
         if filename:
             self.output_path_var.set(filename)
 
     def browse_dataset(self):
         """选择数据集目录"""
-        dirname = filedialog.askdirectory(title="Select Dataset Directory")
+        dirname = filedialog.askdirectory(title="选择数据集目录")
         if dirname:
             self.dataset_path_var.set(dirname)
 
@@ -258,37 +321,47 @@ class SimpleRVCGUI:
         output_path = self.output_path_var.get()
 
         if not input_path or not os.path.exists(input_path):
-            messagebox.showwarning("Warning", "Please select a valid input audio file!")
+            messagebox.showwarning("警告", "请选择一个有效的输入音频文件！")
             return
 
         if not output_path:
-            messagebox.showwarning("Warning", "Please specify an output path!")
+            messagebox.showwarning("警告", "请指定输出路径！")
             return
 
         def convert():
             try:
-                self.log_inference("Starting audio conversion...")
-                self.log_inference(f"Input: {input_path}")
-                self.log_inference(f"Parameters: pitch={self.f0_up_key.get()}, f0_method={self.f0_method.get()}")
+                self.log_inference("开始音频转换...")
+                self.log_inference(f"输入: {input_path}")
+                self.log_inference(f"参数: 音高={self.f0_up_key.get()}, 算法={self.f0_method.get()}")
 
                 # 自动查找对应的 index 文件
-                model_name = self.model_var.get()
-                model_base = model_name.replace(".pth", "")
-                index_root = os.getenv("index_root", "logs")
+                selected_idx = self.model_combo.current()
                 index_file = ""
 
-                # 尝试查找 index 文件
-                model_dir = os.path.join(index_root, model_base)
-                if os.path.exists(model_dir):
-                    for file in os.listdir(model_dir):
-                        if file.endswith(".index") and "added" in file:
-                            index_file = os.path.join(model_dir, file)
-                            break
+                if selected_idx >= 0 and selected_idx < len(self.model_data):
+                    source, model_path = self.model_data[selected_idx]
+
+                    # 根据模型来源确定查找路径
+                    if source == "weights":
+                        # 成品模型，index 在 logs/模型名 下
+                        model_base = model_path.replace(".pth", "")
+                        index_dir = os.path.join("logs", model_base)
+                    else:
+                        # 训练模型，index 在同一目录下
+                        exp_name = model_path.split("/")[0]
+                        index_dir = os.path.join("logs", exp_name)
+
+                    # 尝试查找 index 文件
+                    if os.path.exists(index_dir):
+                        for file in os.listdir(index_dir):
+                            if file.endswith(".index") and "added" in file:
+                                index_file = os.path.join(index_dir, file)
+                                break
 
                 if index_file:
-                    self.log_inference(f"Using index: {index_file}")
+                    self.log_inference(f"使用索引文件: {index_file}")
                 else:
-                    self.log_inference("No index file found, proceeding without index")
+                    self.log_inference("未找到索引文件，不使用索引")
 
                 # 执行推理
                 info, wav_opt = self.vc.vc_single(
@@ -306,22 +379,22 @@ class SimpleRVCGUI:
                     self.protect.get(),
                 )
 
-                self.log_inference(f"Inference result: {info}")
+                self.log_inference(f"推理结果: {info}")
 
                 if wav_opt is not None and len(wav_opt) == 2:
                     sr, audio = wav_opt
                     wavfile.write(output_path, sr, audio)
-                    self.log_inference(f"Audio saved to: {output_path}")
-                    messagebox.showinfo("Success", "Audio conversion completed!")
+                    self.log_inference(f"音频已保存至: {output_path}")
+                    messagebox.showinfo("成功", "音频转换完成！")
                 else:
-                    self.log_inference("Error: Invalid output format")
-                    messagebox.showerror("Error", "Audio conversion failed!")
+                    self.log_inference("错误: 输出格式无效")
+                    messagebox.showerror("错误", "音频转换失败！")
 
             except Exception as e:
                 import traceback
                 error_msg = traceback.format_exc()
-                self.log_inference(f"Error: {error_msg}")
-                messagebox.showerror("Error", f"Conversion failed: {str(e)}")
+                self.log_inference(f"错误: {error_msg}")
+                messagebox.showerror("错误", f"转换失败: {str(e)}")
 
         threading.Thread(target=convert, daemon=True).start()
 
@@ -331,17 +404,17 @@ class SimpleRVCGUI:
         dataset_path = self.dataset_path_var.get()
 
         if not exp_name:
-            messagebox.showwarning("Warning", "Please enter an experiment name!")
+            messagebox.showwarning("警告", "请输入实验名称！")
             return
 
         if not dataset_path or not os.path.exists(dataset_path):
-            messagebox.showwarning("Warning", "Please select a valid dataset directory!")
+            messagebox.showwarning("警告", "请选择一个有效的数据集目录！")
             return
 
         def preprocess():
             try:
-                self.log_training(f"Preprocessing dataset: {dataset_path}")
-                self.log_training(f"Experiment: {exp_name}")
+                self.log_training(f"预处理数据集: {dataset_path}")
+                self.log_training(f"实验名称: {exp_name}")
 
                 sr_dict = {"32k": 32000, "40k": 40000, "48k": 48000}
                 sr = sr_dict[self.sr_var.get()]
@@ -365,7 +438,7 @@ class SimpleRVCGUI:
                     str(per)
                 ]
 
-                self.log_training(f"Running: {' '.join(cmd)}")
+                self.log_training(f"执行命令: {' '.join(cmd)}")
                 result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='ignore')
 
                 if result.stdout:
@@ -374,59 +447,189 @@ class SimpleRVCGUI:
                     self.log_training(result.stderr)
 
                 if result.returncode == 0:
-                    self.log_training("Preprocessing completed!")
-                    messagebox.showinfo("Success", "Dataset preprocessing completed!")
+                    self.log_training("预处理完成！")
+                    messagebox.showinfo("成功", "数据集预处理完成！")
                 else:
-                    self.log_training(f"Process exited with code: {result.returncode}")
-                    messagebox.showwarning("Warning", f"Process completed with warnings (code: {result.returncode})")
+                    self.log_training(f"进程退出代码: {result.returncode}")
+                    messagebox.showwarning("警告", f"进程完成但有警告 (代码: {result.returncode})")
 
             except Exception as e:
                 import traceback
                 error_msg = traceback.format_exc()
-                self.log_training(f"Error: {error_msg}")
-                messagebox.showerror("Error", f"Preprocessing failed: {str(e)}")
+                self.log_training(f"错误: {error_msg}")
+                messagebox.showerror("错误", f"预处理失败: {str(e)}")
 
         threading.Thread(target=preprocess, daemon=True).start()
+
+    def prepare_training_config(self, exp_dir, sr, if_f0, version="v2"):
+        """准备训练配置文件（filelist.txt 和 config.json）"""
+        try:
+            self.log_training("生成训练配置文件...")
+
+            # 生成 filelist.txt
+            gt_wavs_dir = os.path.join(exp_dir, "0_gt_wavs")
+            feature_dir = os.path.join(exp_dir, "3_feature256" if version == "v1" else "3_feature768")
+
+            if if_f0:
+                f0_dir = os.path.join(exp_dir, "2a_f0")
+                f0nsf_dir = os.path.join(exp_dir, "2b-f0nsf")
+                names = (
+                    set([name.split(".")[0] for name in os.listdir(gt_wavs_dir)])
+                    & set([name.split(".")[0] for name in os.listdir(feature_dir)])
+                    & set([name.split(".")[0] for name in os.listdir(f0_dir)])
+                    & set([name.split(".")[0] for name in os.listdir(f0nsf_dir)])
+                )
+            else:
+                names = set([name.split(".")[0] for name in os.listdir(gt_wavs_dir)]) & set(
+                    [name.split(".")[0] for name in os.listdir(feature_dir)]
+                )
+
+            opt = []
+            for name in names:
+                if if_f0:
+                    opt.append(
+                        "%s/%s.wav|%s/%s.npy|%s/%s.wav.npy|%s/%s.wav.npy|%s"
+                        % (
+                            gt_wavs_dir.replace("\\", "\\\\"),
+                            name,
+                            feature_dir.replace("\\", "\\\\"),
+                            name,
+                            f0_dir.replace("\\", "\\\\"),
+                            name,
+                            f0nsf_dir.replace("\\", "\\\\"),
+                            name,
+                            0,  # speaker id
+                        )
+                    )
+                else:
+                    opt.append(
+                        "%s/%s.wav|%s/%s.npy|%s"
+                        % (
+                            gt_wavs_dir.replace("\\", "\\\\"),
+                            name,
+                            feature_dir.replace("\\", "\\\\"),
+                            name,
+                            0,  # speaker id
+                        )
+                    )
+
+            fea_dim = 256 if version == "v1" else 768
+            sr_str = {32000: "32k", 40000: "40k", 48000: "48k"}.get(sr, "40k")
+
+            # 添加 mute 数据
+            if if_f0:
+                for _ in range(2):
+                    opt.append(
+                        "%s/logs/mute/0_gt_wavs/mute%s.wav|%s/logs/mute/3_feature%s/mute.npy|%s/logs/mute/2a_f0/mute.wav.npy|%s/logs/mute/2b-f0nsf/mute.wav.npy|%s"
+                        % (now_dir, sr, now_dir, fea_dim, now_dir, now_dir, 0)
+                    )
+            else:
+                for _ in range(2):
+                    opt.append(
+                        "%s/logs/mute/0_gt_wavs/mute%s.wav|%s/logs/mute/3_feature%s/mute.npy|%s"
+                        % (now_dir, sr, now_dir, fea_dim, 0)
+                    )
+
+            shuffle(opt)
+            with open(os.path.join(exp_dir, "filelist.txt"), "w") as f:
+                f.write("\n".join(opt))
+
+            self.log_training(f"已生成 filelist.txt，共 {len(opt)} 条数据")
+
+            # 生成 config.json
+            # v2 只支持 32k 和 48k，40k 使用 v1
+            if sr_str == "40k":
+                config_path = "v1/40k.json"
+            elif version == "v1":
+                config_path = f"v1/{sr_str}.json"
+            else:
+                config_path = f"v2/{sr_str}.json"
+
+            config_save_path = os.path.join(exp_dir, "config.json")
+            if not os.path.exists(config_save_path):
+                with open(config_save_path, "w", encoding="utf-8") as f:
+                    json.dump(
+                        self.config.json_config[config_path],
+                        f,
+                        ensure_ascii=False,
+                        indent=4,
+                        sort_keys=True,
+                    )
+                    f.write("\n")
+                self.log_training(f"已生成 config.json")
+            else:
+                self.log_training(f"config.json 已存在，跳过生成")
+
+            return True
+        except Exception as e:
+            import traceback
+            error_msg = traceback.format_exc()
+            self.log_training(f"配置文件生成错误: {error_msg}")
+            return False
 
     def extract_features(self):
         """提取特征"""
         exp_name = self.exp_name_var.get()
 
         if not exp_name:
-            messagebox.showwarning("Warning", "Please enter an experiment name!")
+            messagebox.showwarning("警告", "请输入实验名称！")
             return
 
         exp_dir = os.path.join(now_dir, "logs", exp_name)
         if not os.path.exists(exp_dir):
-            messagebox.showwarning("Warning", "Experiment directory not found! Please preprocess first!")
+            messagebox.showwarning("警告", "实验目录不存在！请先预处理数据集！")
             return
 
         def extract():
             try:
-                self.log_training(f"Extracting features for: {exp_name}")
+                self.log_training(f"提取特征: {exp_name}")
 
-                # 调用特征提取脚本
                 python_cmd = sys.executable
+                version = "v2"  # 默认使用 v2
 
                 # 提取 F0
                 if self.if_f0_var.get():
-                    self.log_training("Extracting F0 features...")
-                    cmd = f'"{python_cmd}" infer/modules/train/extract/extract_f0_print.py "{exp_dir}" 1 harvest'
-                    os.system(cmd)
+                    self.log_training(f"提取音高特征 (算法: {self.train_f0_method.get()})...")
+                    cmd = [
+                        python_cmd,
+                        "infer/modules/train/extract/extract_f0_print.py",
+                        exp_dir,
+                        str(os.cpu_count()),
+                        self.train_f0_method.get()
+                    ]
+                    self.log_training(f"执行: {' '.join(cmd)}")
+                    result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='ignore')
+                    if result.stdout:
+                        self.log_training(result.stdout)
+                    if result.stderr:
+                        self.log_training(result.stderr)
 
                 # 提取 HuBERT 特征
-                self.log_training("Extracting HuBERT features...")
-                cmd = f'"{python_cmd}" infer/modules/train/extract_feature_print.py cpu 1 0 "{exp_dir}" v2'
-                os.system(cmd)
+                self.log_training("提取 HuBERT 特征...")
+                cmd = [
+                    python_cmd,
+                    "infer/modules/train/extract_feature_print.py",
+                    "cpu",
+                    "1",
+                    "0",
+                    exp_dir,
+                    version
+                ]
+                self.log_training(f"执行: {' '.join(cmd)}")
+                result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='ignore')
+                if result.stdout:
+                    self.log_training(result.stdout)
+                if result.stderr:
+                    self.log_training(result.stderr)
 
-                self.log_training("Feature extraction completed!")
-                messagebox.showinfo("Success", "Feature extraction completed!")
+                self.log_training("特征提取完成！")
+                messagebox.showinfo("成功", "特征提取完成！")
 
             except Exception as e:
                 import traceback
                 error_msg = traceback.format_exc()
-                self.log_training(f"Error: {error_msg}")
-                messagebox.showerror("Error", f"Feature extraction failed: {str(e)}")
+                self.log_training(f"错误: {error_msg}")
+                messagebox.showerror("错误", f"特征提取失败: {str(e)}")
 
         threading.Thread(target=extract, daemon=True).start()
 
@@ -435,28 +638,206 @@ class SimpleRVCGUI:
         exp_name = self.exp_name_var.get()
 
         if not exp_name:
-            messagebox.showwarning("Warning", "Please enter an experiment name!")
+            messagebox.showwarning("警告", "请输入实验名称！")
             return
 
         exp_dir = os.path.join(now_dir, "logs", exp_name)
         if not os.path.exists(exp_dir):
-            messagebox.showwarning("Warning", "Experiment directory not found! Please preprocess and extract features first!")
+            messagebox.showwarning("警告", "实验目录不存在！请先预处理和提取特征！")
             return
 
-        self.log_training("Training feature is complex and requires manual setup.")
-        self.log_training("Please use the original training script or Gradio web interface.")
-        self.log_training(f"Experiment directory: {exp_dir}")
-        messagebox.showinfo("Info", "For training, please use:\npython infer-web.py\nor check the Training tab in the web interface.")
+        def train():
+            try:
+                self.log_training(f"开始训练模型: {exp_name}")
+
+                python_cmd = sys.executable
+                sr_dict = {"32k": 32000, "40k": 40000, "48k": 48000}
+                sr = sr_dict[self.sr_var.get()]
+
+                # 准备训练配置
+                if not self.prepare_training_config(exp_dir, sr, self.if_f0_var.get(), "v2"):
+                    messagebox.showerror("错误", "配置文件生成失败！")
+                    return
+
+                # 使用简化的训练命令
+                cmd = [
+                    python_cmd,
+                    "infer/modules/train/train.py",
+                    "-e", exp_name,
+                    "-sr", str(sr),
+                    "-f0", "1" if self.if_f0_var.get() else "0",
+                    "-bs", str(self.batch_size.get()),
+                    "-g", "0",
+                    "-te", str(self.total_epoch.get()),
+                    "-se", str(self.save_epoch.get()),
+                    "-pg", "",
+                    "-pd", "",
+                    "-l", "0",
+                    "-c", "0",
+                    "-sw", "0",
+                    "-v", "v2"
+                ]
+
+                self.log_training(f"执行命令: {' '.join(cmd)}")
+                self.log_training("训练已开始，这可能需要较长时间...")
+                self.log_training("警告：训练过程会在后台运行，请查看日志文件获取详细进度")
+
+                # 使用 Popen 在后台运行
+                process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    encoding='utf-8',
+                    errors='ignore',
+                    bufsize=1
+                )
+
+                # 实时读取输出
+                for line in process.stdout:
+                    self.log_training(line.strip())
+
+                process.wait()
+
+                if process.returncode == 0:
+                    self.log_training("训练完成！")
+                    messagebox.showinfo("成功", "模型训练完成！")
+                else:
+                    self.log_training(f"训练进程退出代码: {process.returncode}")
+                    messagebox.showwarning("警告", f"训练完成但有警告 (代码: {process.returncode})")
+
+            except Exception as e:
+                import traceback
+                error_msg = traceback.format_exc()
+                self.log_training(f"错误: {error_msg}")
+                messagebox.showerror("错误", f"训练失败: {str(e)}")
+
+        threading.Thread(target=train, daemon=True).start()
+
+    def auto_train(self):
+        """一键训练"""
+        if self.training_in_progress:
+            messagebox.showwarning("警告", "训练正在进行中，请等待完成！")
+            return
+
+        exp_name = self.exp_name_var.get()
+        dataset_path = self.dataset_path_var.get()
+
+        if not exp_name:
+            messagebox.showwarning("警告", "请输入实验名称！")
+            return
+
+        if not dataset_path or not os.path.exists(dataset_path):
+            messagebox.showwarning("警告", "请选择一个有效的数据集目录！")
+            return
+
+        response = messagebox.askyesno(
+            "确认",
+            f"将自动执行以下步骤：\n1. 预处理数据集\n2. 提取特征\n3. 生成训练配置\n4. 训练模型\n\n实验名称: {exp_name}\n数据集: {dataset_path}\n\n确定继续？"
+        )
+
+        if not response:
+            return
+
+        def auto_train_process():
+            try:
+                self.training_in_progress = True
+                self.log_training("="*60)
+                self.log_training("开始一键训练流程")
+                self.log_training("="*60)
+
+                # 步骤 1: 预处理
+                self.log_training("\n[步骤 1/3] 预处理数据集...")
+                sr_dict = {"32k": 32000, "40k": 40000, "48k": 48000}
+                sr = sr_dict[self.sr_var.get()]
+                exp_dir = os.path.join(now_dir, "logs", exp_name)
+                os.makedirs(exp_dir, exist_ok=True)
+
+                python_cmd = sys.executable
+                n_p = os.cpu_count()
+                per = 3.7
+
+                cmd = [python_cmd, "infer/modules/train/preprocess.py", dataset_path, str(sr), str(n_p), exp_dir, "False", str(per)]
+                result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='ignore')
+                if result.stdout:
+                    self.log_training(result.stdout)
+                if result.returncode != 0:
+                    raise Exception(f"预处理失败 (代码: {result.returncode})")
+                self.log_training("[步骤 1/3] 预处理完成！\n")
+
+                # 步骤 2: 提取特征
+                self.log_training("[步骤 2/3] 提取特征...")
+                version = "v2"
+
+                if self.if_f0_var.get():
+                    self.log_training(f"提取音高特征 (算法: {self.train_f0_method.get()})...")
+                    cmd = [python_cmd, "infer/modules/train/extract/extract_f0_print.py", exp_dir, str(n_p), self.train_f0_method.get()]
+                    result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='ignore')
+                    if result.stdout:
+                        self.log_training(result.stdout)
+
+                self.log_training("提取 HuBERT 特征...")
+                cmd = [python_cmd, "infer/modules/train/extract_feature_print.py", "cpu", "1", "0", exp_dir, version]
+                result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='ignore')
+                if result.stdout:
+                    self.log_training(result.stdout)
+                self.log_training("[步骤 2/3] 特征提取完成！\n")
+
+                # 步骤 3: 准备训练配置
+                self.log_training("\n[步骤 3/4] 准备训练配置...")
+                if not self.prepare_training_config(exp_dir, sr, self.if_f0_var.get(), "v2"):
+                    raise Exception("配置文件生成失败")
+                self.log_training("[步骤 3/4] 配置文件已生成！\n")
+
+                # 步骤 4: 训练
+                self.log_training("[步骤 4/4] 开始训练模型...")
+                cmd = [
+                    python_cmd, "infer/modules/train/train.py",
+                    "-e", exp_name,
+                    "-sr", str(sr),
+                    "-f0", "1" if self.if_f0_var.get() else "0",
+                    "-bs", str(self.batch_size.get()),
+                    "-g", "0",
+                    "-te", str(self.total_epoch.get()),
+                    "-se", str(self.save_epoch.get()),
+                    "-pg", "", "-pd", "",
+                    "-l", "0", "-c", "0", "-sw", "0", "-v", "v2"
+                ]
+
+                process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='ignore', bufsize=1)
+                for line in process.stdout:
+                    self.log_training(line.strip())
+                process.wait()
+
+                if process.returncode == 0:
+                    self.log_training("\n" + "="*60)
+                    self.log_training("一键训练完成！")
+                    self.log_training("="*60)
+                    messagebox.showinfo("成功", "一键训练完成！模型已保存。")
+                else:
+                    raise Exception(f"训练失败 (代码: {process.returncode})")
+
+            except Exception as e:
+                import traceback
+                error_msg = traceback.format_exc()
+                self.log_training(f"\n错误: {error_msg}")
+                messagebox.showerror("错误", f"一键训练失败: {str(e)}")
+            finally:
+                self.training_in_progress = False
+
+        threading.Thread(target=auto_train_process, daemon=True).start()
 
     def log_inference(self, message):
         """在推理日志中记录信息"""
         self.inference_log.insert(tk.END, f"{message}\n")
         self.inference_log.see(tk.END)
+        self.root.update_idletasks()
 
     def log_training(self, message):
         """在训练日志中记录信息"""
         self.training_log.insert(tk.END, f"{message}\n")
         self.training_log.see(tk.END)
+        self.root.update_idletasks()
 
 
 def main():
